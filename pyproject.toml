@@ -1,0 +1,12 @@
+[project]
+name = "architecture-council"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "crewai[google-genai]>=1.9.3",
+    "gradio>=6.8.0",
+    "litellm>=1.75.3",
+    "pyaml>=26.2.1",
+    "python-dotenv>=1.0.0",
+]
