@@ -1,0 +1,24 @@
+# virtualenv
+.venv/
+venv/
+.env
+
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# editors / OS
+.DS_Store
+.vscode/
+.idea/
+l

@@ -1,0 +1,104 @@
+formulate_task:
+  description: >
+    Analyze the following feature request and formulate it as a clear architectural challenge.
+    Define scope, constraints, key decisions needed, and evaluation criteria.
+
+    Feature Request: {feature_request}
+    Tech Stack: {tech_stack}
+    Complexity: {complexity}/5
+
+    Output a structured challenge document with:
+    1. Problem Statement
+    2. Key Architectural Decisions (list 3-5)
+    3. Constraints & Non-functional Requirements
+    4. Evaluation Criteria for proposals
+  expected_output: "A structured architectural challenge document in markdown"
+  agent: solution_architect
+
+proposal_a:
+  description: >
+    Based on the architectural challenge below, propose a complete backend-focused solution.
+
+    Challenge:
+    {formulated_challenge}
+
+    Your proposal must include:
+    1. High-level architecture diagram (text/ASCII)
+    2. Component breakdown with responsibilities
+    3. Data model sketch
+    4. API design approach
+    5. Key technology choices with justification
+    6. Risks and mitigations
+    7. Estimated effort (T-shirt sizing)
+  expected_output: "A detailed backend architecture proposal in markdown"
+  agent: senior_architect_a
+
+proposal_b:
+  description: >
+    Based on the architectural challenge below, propose a complete systems-focused solution.
+
+    Challenge:
+    {formulated_challenge}
+
+    Your proposal must include:
+    1. High-level architecture diagram (text/ASCII)
+    2. Infrastructure & deployment topology
+    3. Communication patterns (sync/async)
+    4. Scalability & resilience strategy
+    5. Observability plan
+    6. Key technology choices with justification
+    7. Risks and mitigations
+    8. Estimated effort (T-shirt sizing)
+  expected_output: "A detailed systems architecture proposal in markdown"
+  agent: senior_architect_b
+
+critique_a:
+  description: >
+    Critically review Proposal B (Systems Architecture) from your Backend perspective.
+
+    Proposal B:
+    {proposal_b_text}
+
+    Evaluate:
+    1. Practicality of implementation
+    2. Over-engineering concerns
+    3. What you'd adopt from this proposal
+    4. What you'd push back on
+    5. Specific improvements you'd suggest
+  expected_output: "A critical review of Proposal B with specific feedback"
+  agent: senior_architect_a
+
+critique_b:
+  description: >
+    Critically review Proposal A (Backend Architecture) from your Systems perspective.
+
+    Proposal A:
+    {proposal_a_text}
+
+    Evaluate:
+    1. Operational readiness
+    2. Scalability gaps
+    3. What you'd adopt from this proposal
+    4. What you'd push back on
+    5. Specific improvements you'd suggest
+  expected_output: "A critical review of Proposal A with specific feedback"
+  agent: senior_architect_b
+
+final_decision:
+  description: >
+    You've received two proposals and their cross-critiques. Make a final architectural decision.
+
+    Proposal A (Backend): {proposal_a_text}
+    Proposal B (Systems): {proposal_b_text}
+    Critique of B by A: {critique_a_text}
+    Critique of A by B: {critique_b_text}
+
+    Deliver:
+    1. **Decision**: Which approach (A, B, or Hybrid) and why
+    2. **Final Architecture**: The synthesized solution
+    3. **Key Trade-offs**: What we're accepting and why
+    4. **Implementation Roadmap**: Phased approach
+    5. **Open Questions**: What needs further investigation
+    6. **ADR (Architecture Decision Record)**: Formal record of this decision
+  expected_output: "A final architectural decision document with ADR"
+  agent: solution_architect
