@@ -10,3 +10,20 @@ dependencies = [
     "pyaml>=26.2.1",
     "python-dotenv>=1.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15",
+    "pre-commit>=4.2",
+    "ruff>=0.15",
+    "types-pyyaml>=6.0",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+lint.select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
