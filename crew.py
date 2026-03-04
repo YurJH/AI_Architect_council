@@ -3,29 +3,40 @@
 import json
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 import yaml
-from crewai import Agent, Crew, Task, Process
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
+
+# Normalize: CrewAI's native Gemini provider checks GOOGLE_API_KEY first
+if os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
+
+from crewai import Agent, Crew, Task  # noqa: E402
 
 BASE_DIR = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "config"
 OUTPUT_DIR = BASE_DIR / "output" / "sessions"
 
 
-def _load_yaml(name: str) -> dict:
+def _load_yaml(name: str) -> dict[str, Any]:
     with open(CONFIG_DIR / name) as f:
         return yaml.safe_load(f)
 
 
-def _make_agents(agents_cfg: dict) -> dict[str, Agent]:
+def _make_agents(agents_cfg: dict[str, Any]) -> dict[str, Agent]:
     """Create CrewAI agents from config. Model routing via LiteLLM prefixes."""
     model_map = {
         "solution_architect": os.getenv("SA_MODEL", "anthropic/claude-opus-4-6"),
         "senior_architect_a": os.getenv("ARCH_A_MODEL", "anthropic/claude-sonnet-4-6"),
-        "senior_architect_b": os.getenv("ARCH_B_MODEL", "gemini/gemini-3.1-pro-preview"),
+        "senior_architect_b": os.getenv(
+            "ARCH_B_MODEL", "gemini/gemini-3.1-pro-preview"
+        ),
     }
     agents = {}
     for key, cfg in agents_cfg.items():
@@ -40,12 +51,56 @@ def _make_agents(agents_cfg: dict) -> dict[str, Agent]:
     return agents
 
 
+def _run_step(
+    step_key: str,
+    task_name: str,
+    agent: Agent,
+    format_args: dict[str, Any],
+    tasks_cfg: dict[str, Any],
+    results: dict[str, str],
+    notify: Callable[[str, str], None],
+    start_message: str,
+) -> None:
+    """Run a single pipeline step: create Task, Crew, kickoff, store result."""
+    notify(step_key, start_message)
+    task = Task(
+        description=tasks_cfg[task_name]["description"].format(**format_args),
+        expected_output=tasks_cfg[task_name]["expected_output"],
+        agent=agent,
+    )
+    crew = Crew(agents=[agent], tasks=[task], verbose=True)
+    result = crew.kickoff()
+    results[step_key] = str(result)
+    notify(step_key + "_done", results[step_key])
+
+
+def _save_session(session: dict[str, Any], results: dict[str, str]) -> None:
+    """Persist session JSON, per-step markdown files, and full transcript."""
+    session_dir = OUTPUT_DIR / session["id"]
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    (session_dir / "session.json").write_text(
+        json.dumps(session, indent=2, ensure_ascii=False)
+    )
+    for key, content in results.items():
+        (session_dir / f"{key}.md").write_text(content)
+
+    transcript = f"# Architecture Council — {session['id']}\n\n"
+    transcript += (
+        f"**Feature:** {session['feature']}\n"
+        f"**Stack:** {session['tech_stack']} | **Complexity:** {session['complexity']}/5\n\n"
+    )
+    for key, content in results.items():
+        transcript += f"---\n## {key.replace('_', ' ').title()}\n\n{content}\n\n"
+    (session_dir / "full_transcript.md").write_text(transcript)
+
+
 def run_council(
     feature_request: str,
-    tech_stack: str = "Django",
+    tech_stack: str = "FastApi",
     complexity: int = 3,
     on_step: Callable[[str, str], None] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Run a full architecture council session.
 
     Args:
@@ -65,146 +120,127 @@ def run_council(
         if on_step:
             on_step(step, content)
 
-    session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    session_dir = OUTPUT_DIR / session_id
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    results = {}
-    token_counts = {}
+    results: dict[str, str] = {}
     t0 = time.time()
 
-    # --- Step 1: Formulate the challenge ---
-    notify("formulation", "🎯 Solution Architect is formulating the challenge...")
-    task_formulate = Task(
-        description=tasks_cfg["formulate_task"]["description"].format(
-            feature_request=feature_request,
-            tech_stack=tech_stack,
-            complexity=complexity,
+    steps: list[
+        tuple[
+            str,
+            str,
+            str,
+            dict[str, Any] | Callable[[dict[str, str]], dict[str, Any]],
+            str,
+        ]
+    ] = [
+        (
+            "formulation",
+            "formulate_task",
+            "solution_architect",
+            {
+                "feature_request": feature_request,
+                "tech_stack": tech_stack,
+                "complexity": complexity,
+            },
+            "🎯 Solution Architect is formulating the challenge...",
         ),
-        expected_output=tasks_cfg["formulate_task"]["expected_output"],
-        agent=agents["solution_architect"],
-    )
-    crew1 = Crew(agents=[agents["solution_architect"]], tasks=[task_formulate], verbose=True)
-    result1 = crew1.kickoff()
-    results["formulation"] = str(result1)
-    notify("formulation_done", results["formulation"])
+        (
+            "proposal_a",
+            "proposal_a",
+            "senior_architect_a",
+            lambda r: {"formulated_challenge": r["formulation"]},
+            "🔵 Senior Architect A (Backend) is working on proposal...",
+        ),
+        (
+            "proposal_b",
+            "proposal_b",
+            "senior_architect_b",
+            lambda r: {"formulated_challenge": r["formulation"]},
+            "🔴 Senior Architect B (Systems) is working on proposal...",
+        ),
+        (
+            "critique_a",
+            "critique_a",
+            "senior_architect_a",
+            lambda r: {"proposal_b_text": r["proposal_b"]},
+            "🔵 Architect A is reviewing Proposal B...",
+        ),
+        (
+            "critique_b",
+            "critique_b",
+            "senior_architect_b",
+            lambda r: {"proposal_a_text": r["proposal_a"]},
+            "🔴 Architect B is reviewing Proposal A...",
+        ),
+        (
+            "final_decision",
+            "final_decision",
+            "solution_architect",
+            lambda r: {
+                "proposal_a_text": r["proposal_a"],
+                "proposal_b_text": r["proposal_b"],
+                "critique_a_text": r["critique_a"],
+                "critique_b_text": r["critique_b"],
+            },
+            "⚖️ Solution Architect is making the final decision...",
+        ),
+    ]
 
-    # --- Step 2: Proposals (could be parallel, but sequential for clarity) ---
-    notify("proposal_a", "🔵 Senior Architect A (Backend) is working on proposal...")
-    task_prop_a = Task(
-        description=tasks_cfg["proposal_a"]["description"].format(
-            formulated_challenge=results["formulation"],
-        ),
-        expected_output=tasks_cfg["proposal_a"]["expected_output"],
-        agent=agents["senior_architect_a"],
-    )
-    crew2a = Crew(agents=[agents["senior_architect_a"]], tasks=[task_prop_a], verbose=True)
-    result2a = crew2a.kickoff()
-    results["proposal_a"] = str(result2a)
-    notify("proposal_a_done", results["proposal_a"])
-
-    notify("proposal_b", "🔴 Senior Architect B (Systems) is working on proposal...")
-    task_prop_b = Task(
-        description=tasks_cfg["proposal_b"]["description"].format(
-            formulated_challenge=results["formulation"],
-        ),
-        expected_output=tasks_cfg["proposal_b"]["expected_output"],
-        agent=agents["senior_architect_b"],
-    )
-    crew2b = Crew(agents=[agents["senior_architect_b"]], tasks=[task_prop_b], verbose=True)
-    result2b = crew2b.kickoff()
-    results["proposal_b"] = str(result2b)
-    notify("proposal_b_done", results["proposal_b"])
-
-    # --- Step 3: Cross-critiques ---
-    notify("critique_a", "🔵 Architect A is reviewing Proposal B...")
-    task_crit_a = Task(
-        description=tasks_cfg["critique_a"]["description"].format(
-            proposal_b_text=results["proposal_b"],
-        ),
-        expected_output=tasks_cfg["critique_a"]["expected_output"],
-        agent=agents["senior_architect_a"],
-    )
-    crew3a = Crew(agents=[agents["senior_architect_a"]], tasks=[task_crit_a], verbose=True)
-    result3a = crew3a.kickoff()
-    results["critique_a"] = str(result3a)
-    notify("critique_a_done", results["critique_a"])
-
-    notify("critique_b", "🔴 Architect B is reviewing Proposal A...")
-    task_crit_b = Task(
-        description=tasks_cfg["critique_b"]["description"].format(
-            proposal_a_text=results["proposal_a"],
-        ),
-        expected_output=tasks_cfg["critique_b"]["expected_output"],
-        agent=agents["senior_architect_b"],
-    )
-    crew3b = Crew(agents=[agents["senior_architect_b"]], tasks=[task_crit_b], verbose=True)
-    result3b = crew3b.kickoff()
-    results["critique_b"] = str(result3b)
-    notify("critique_b_done", results["critique_b"])
-
-    # --- Step 4: Final decision ---
-    notify("final", "⚖️ Solution Architect is making the final decision...")
-    task_final = Task(
-        description=tasks_cfg["final_decision"]["description"].format(
-            proposal_a_text=results["proposal_a"],
-            proposal_b_text=results["proposal_b"],
-            critique_a_text=results["critique_a"],
-            critique_b_text=results["critique_b"],
-        ),
-        expected_output=tasks_cfg["final_decision"]["expected_output"],
-        agent=agents["solution_architect"],
-    )
-    crew4 = Crew(agents=[agents["solution_architect"]], tasks=[task_final], verbose=True)
-    result4 = crew4.kickoff()
-    results["final_decision"] = str(result4)
-    notify("final_done", results["final_decision"])
+    for step_key, task_name, agent_key, format_args, start_msg in steps:
+        if callable(format_args):
+            format_args = format_args(results)
+        _run_step(
+            step_key,
+            task_name,
+            agents[agent_key],
+            format_args,
+            tasks_cfg,
+            results,
+            notify,
+            start_msg,
+        )
 
     duration = time.time() - t0
 
-    # --- Save session ---
     session = {
-        "id": session_id,
+        "id": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
         "feature": feature_request,
         "tech_stack": tech_stack,
         "complexity": complexity,
         "duration_sec": round(duration, 1),
         "agents": {
-            "solution_architect": {"model": os.getenv("SA_MODEL", "anthropic/claude-opus-4-6")},
-            "senior_architect_a": {"model": os.getenv("ARCH_A_MODEL", "anthropic/claude-sonnet-4-6")},
-            "senior_architect_b": {"model": os.getenv("ARCH_B_MODEL", "gemini/gemini-3.1-pro-preview")},
+            "solution_architect": {
+                "model": os.getenv("SA_MODEL", "anthropic/claude-opus-4-6")
+            },
+            "senior_architect_a": {
+                "model": os.getenv("ARCH_A_MODEL", "anthropic/claude-sonnet-4-6")
+            },
+            "senior_architect_b": {
+                "model": os.getenv("ARCH_B_MODEL", "gemini/gemini-3.1-pro-preview")
+            },
         },
         "results": results,
     }
 
-    (session_dir / "session.json").write_text(json.dumps(session, indent=2, ensure_ascii=False))
-    for key, content in results.items():
-        (session_dir / f"{key}.md").write_text(content)
-
-    # Full transcript
-    transcript = f"# Architecture Council — {session_id}\n\n"
-    transcript += f"**Feature:** {feature_request}\n**Stack:** {tech_stack} | **Complexity:** {complexity}/5\n\n"
-    for key, content in results.items():
-        transcript += f"---\n## {key.replace('_', ' ').title()}\n\n{content}\n\n"
-    (session_dir / "full_transcript.md").write_text(transcript)
-
+    _save_session(session, results)
     return session
 
 
-def list_sessions() -> list[dict]:
+def list_sessions() -> list[dict[str, Any]]:
     """List all past sessions."""
-    sessions = []
+    sessions: list[dict[str, Any]] = []
     if not OUTPUT_DIR.exists():
         return sessions
     for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
         meta = d / "session.json"
         if meta.exists():
             data = json.loads(meta.read_text())
-            sessions.append({
-                "id": data["id"],
-                "feature": data["feature"][:80],
-                "stack": data.get("tech_stack", "?"),
-                "complexity": data.get("complexity", "?"),
-                "duration": f"{data.get('duration_sec', 0)}s",
-            })
+            sessions.append(
+                {
+                    "id": data["id"],
+                    "feature": data["feature"][:80],
+                    "stack": data.get("tech_stack", "?"),
+                    "complexity": data.get("complexity", "?"),
+                    "duration": f"{data.get('duration_sec', 0)}s",
+                }
+            )
     return sessions
